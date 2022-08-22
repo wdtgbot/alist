@@ -5,7 +5,6 @@ import (
 	"github.com/Xhofe/alist/drivers/base"
 	"github.com/Xhofe/alist/model"
 	"github.com/Xhofe/alist/utils"
-	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
 	"path/filepath"
 )
@@ -33,15 +32,17 @@ func (driver Lanzou) Items() []base.Item {
 			Label:       "cookie",
 			Type:        base.TypeString,
 			Description: "about 15 days valid",
+			Required:    true,
+		},
+		{
+			Name:     "site_url",
+			Label:    "share url",
+			Type:     base.TypeString,
+			Required: true,
 		},
 		{
 			Name:  "root_folder",
 			Label: "root folder file_id",
-			Type:  base.TypeString,
-		},
-		{
-			Name:  "site_url",
-			Label: "share url",
 			Type:  base.TypeString,
 		},
 		{
@@ -53,6 +54,9 @@ func (driver Lanzou) Items() []base.Item {
 }
 
 func (driver Lanzou) Save(account *model.Account, old *model.Account) error {
+	if account == nil {
+		return nil
+	}
 	if account.InternalType == "cookie" {
 		if account.RootFolder == "" {
 			account.RootFolder = "-1"
@@ -121,18 +125,27 @@ func (driver Lanzou) Link(args base.Args, account *model.Account) (*base.Link, e
 	}
 	log.Debugf("down file: %+v", file)
 	downId := file.Id
+	pwd := ""
 	if account.InternalType == "cookie" {
-		downId, err = driver.GetDownPageId(file.Id, account)
+		downId, pwd, err = driver.GetDownPageId(file.Id, account)
 		if err != nil {
 			return nil, err
 		}
 	}
-	url, err := driver.GetLink(downId)
+	var url string
+	//if pwd != "" {
+	//url, err = driver.GetLinkWithPassword(downId, pwd, account)
+	//} else {
+	url, err = driver.GetLink(downId, pwd, account)
+	//}
 	if err != nil {
 		return nil, err
 	}
 	link := base.Link{
 		Url: url,
+		Headers: []base.Header{
+			{Name: "User-Agent", Value: base.UserAgent},
+		},
 	}
 	return &link, nil
 }
@@ -154,9 +167,9 @@ func (driver Lanzou) Path(path string, account *model.Account) (*model.File, []m
 	return nil, files, nil
 }
 
-func (driver Lanzou) Proxy(c *gin.Context, account *model.Account) {
-	c.Request.Header.Del("Origin")
-}
+//func (driver Lanzou) Proxy(r *http.Request, account *model.Account) {
+//	r.Header.Del("Origin")
+//}
 
 func (driver Lanzou) Preview(path string, account *model.Account) (interface{}, error) {
 	return nil, base.ErrNotSupport

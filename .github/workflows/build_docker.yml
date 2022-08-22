@@ -1,17 +1,11 @@
-name: docker
+name: build_docker
 
 on:
   push:
-    branches:
-      - 'v2'
-    tags:
-      - 'v*'
-  pull_request:
-    branches:
-      - 'v2'
+    branches: [ v2 ]
 
 jobs:
-  docker:
+  build_docker:
     name: Docker
     runs-on: ubuntu-latest
     steps:
@@ -27,7 +21,9 @@ jobs:
         with:
           node-version: '16'
       - name: Build web
-        run: bash build.sh web
+        run: |
+          bash build.sh web
+          mv dist/* public
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v1
       - name: Set up Docker Buildx

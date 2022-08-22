@@ -51,6 +51,24 @@ func SortFiles(files []File, account *Account) {
 	})
 }
 
+func ExtractFolder(files []File, account *Account) {
+	if account.ExtractFolder == "" {
+		return
+	}
+	front := account.ExtractFolder == "front"
+	sort.SliceStable(files, func(i, j int) bool {
+		if files[i].IsDir() || files[j].IsDir() {
+			if !files[i].IsDir() {
+				return !front
+			}
+			if !files[j].IsDir() {
+				return front
+			}
+		}
+		return false
+	})
+}
+
 func (f File) GetSize() uint64 {
 	return uint64(f.Size)
 }
@@ -65,4 +83,8 @@ func (f File) ModTime() time.Time {
 
 func (f File) IsDir() bool {
 	return f.Type == conf.FOLDER
+}
+
+func (f File) GetType() int {
+	return f.Type
 }

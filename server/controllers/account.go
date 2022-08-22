@@ -3,6 +3,7 @@ package controllers
 import (
 	"fmt"
 	"github.com/Xhofe/alist/drivers/base"
+	"github.com/Xhofe/alist/drivers/operate"
 	"github.com/Xhofe/alist/model"
 	"github.com/Xhofe/alist/server/common"
 	"github.com/gin-gonic/gin"
@@ -28,7 +29,7 @@ func CreateAccount(c *gin.Context) {
 	}
 	driver, ok := base.GetDriver(req.Type)
 	if !ok {
-		common.ErrorResp(c, fmt.Errorf("no [%s] driver", req.Type), 400)
+		common.ErrorStrResp(c, fmt.Sprintf("No [%s] driver", req.Type), 400)
 		return
 	}
 	now := time.Now()
@@ -37,7 +38,8 @@ func CreateAccount(c *gin.Context) {
 		common.ErrorResp(c, err, 500)
 	} else {
 		log.Debugf("new account: %+v", req)
-		err = driver.Save(&req, nil)
+		//err = driver.Save(&req, nil)
+		err = operate.Save(driver, &req, nil)
 		if err != nil {
 			common.ErrorResp(c, err, 500)
 			return
@@ -54,7 +56,7 @@ func SaveAccount(c *gin.Context) {
 	}
 	driver, ok := base.GetDriver(req.Type)
 	if !ok {
-		common.ErrorResp(c, fmt.Errorf("no [%s] driver", req.Type), 400)
+		common.ErrorStrResp(c, fmt.Sprintf("No [%s] driver", req.Type), 400)
 		return
 	}
 	old, err := model.GetAccountById(req.ID)
@@ -71,7 +73,8 @@ func SaveAccount(c *gin.Context) {
 		common.ErrorResp(c, err, 500)
 	} else {
 		log.Debugf("save account: %+v", req)
-		err = driver.Save(&req, old)
+		//err = driver.Save(&req, old)
+		err = operate.Save(driver, &req, nil)
 		if err != nil {
 			common.ErrorResp(c, err, 500)
 			return
@@ -87,9 +90,17 @@ func DeleteAccount(c *gin.Context) {
 		common.ErrorResp(c, err, 400)
 		return
 	}
-	if err := model.DeleteAccount(uint(id)); err != nil {
+	if account, err := model.DeleteAccount(uint(id)); err != nil {
 		common.ErrorResp(c, err, 500)
 		return
+	} else {
+		driver, ok := base.GetDriver(account.Type)
+		if ok {
+			//_ = driver.Save(nil, account)
+			_ = operate.Save(driver, nil, account)
+		} else {
+			log.Errorf("no driver: %s", account.Type)
+		}
 	}
 	common.SuccessResp(c)
 }

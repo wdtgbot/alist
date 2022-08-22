@@ -1,31 +1,25 @@
 package _89
 
 import (
-	"bytes"
-	"crypto/md5"
-	"encoding/base64"
-	"encoding/hex"
 	"fmt"
+	"net/http"
+	"path/filepath"
+	"strings"
+
 	"github.com/Xhofe/alist/conf"
 	"github.com/Xhofe/alist/drivers/base"
 	"github.com/Xhofe/alist/model"
 	"github.com/Xhofe/alist/utils"
-	"github.com/gin-gonic/gin"
-	jsoniter "github.com/json-iterator/go"
+	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
-	"io"
-	"math"
-	"net/http"
-	"path/filepath"
-	"strconv"
-	"strings"
 )
 
 type Cloud189 struct{}
 
 func (driver Cloud189) Config() base.DriverConfig {
 	return base.DriverConfig{
-		Name: "189Cloud",
+		Name:      "189Cloud",
+		LocalSort: true,
 	}
 }
 
@@ -51,38 +45,56 @@ func (driver Cloud189) Items() []base.Item {
 			Type:     base.TypeString,
 			Required: true,
 		},
-		{
-			Name:     "order_by",
-			Label:    "order_by",
-			Type:     base.TypeSelect,
-			Values:   "name,size,lastOpTime,createdDate",
-			Required: true,
-		},
-		{
-			Name:     "order_direction",
-			Label:    "desc",
-			Type:     base.TypeSelect,
-			Values:   "true,false",
-			Required: true,
-		},
+		//{
+		//	Name:     "internal_type",
+		//	Label:    "189cloud type",
+		//	Type:     base.TypeSelect,
+		//	Required: true,
+		//	Values:   "Personal,Family",
+		//},
+		//{
+		//	Name:  "site_id",
+		//	Label: "family id",
+		//	Type:  base.TypeString,
+		//},
+		//{
+		//	Name:     "order_by",
+		//	Label:    "order_by",
+		//	Type:     base.TypeSelect,
+		//	Values:   "name,size,lastOpTime,createdDate",
+		//	Required: true,
+		//},
+		//{
+		//	Name:     "order_direction",
+		//	Label:    "desc",
+		//	Type:     base.TypeSelect,
+		//	Values:   "true,false",
+		//	Required: true,
+		//},
 	}
 }
 
 func (driver Cloud189) Save(account *model.Account, old *model.Account) error {
-	if old != nil && old.Name != account.Name {
+	if old != nil {
 		delete(client189Map, old.Name)
+	}
+	if account == nil {
+		return nil
 	}
 	if err := driver.Login(account); err != nil {
 		account.Status = err.Error()
 		_ = model.SaveAccount(account)
 		return err
 	}
-	account.Status = "work"
-	err := model.SaveAccount(account)
+	sessionKey, err := driver.GetSessionKey(account)
 	if err != nil {
-		return err
+		account.Status = err.Error()
+	} else {
+		account.Status = "work"
+		account.DriveId = sessionKey
 	}
-	return nil
+	_ = model.SaveAccount(account)
+	return err
 }
 
 func (driver Cloud189) File(path string, account *model.Account) (*model.File, error) {
@@ -144,43 +156,55 @@ func (driver Cloud189) Link(args base.Args, account *model.Account) (*base.Link,
 	if file.Type == conf.FOLDER {
 		return nil, base.ErrNotFile
 	}
-	client, ok := client189Map[account.Name]
-	if !ok {
-		return nil, fmt.Errorf("can't find [%s] client", account.Name)
-	}
-	var e Cloud189Error
-	var resp Cloud189Down
-	_, err = client.R().SetResult(&resp).SetError(&e).
-		SetHeader("Accept", "application/json;charset=UTF-8").
-		SetQueryParams(map[string]string{
-			"noCache": random(),
-			"fileId":  file.Id,
-		}).Get("https://cloud.189.cn/api/open/file/getFileDownloadUrl.action")
+	var resp DownResp
+	u := "https://cloud.189.cn/api/portal/getFileInfo.action"
+	body, err := driver.Request(u, base.Get, map[string]string{
+		"fileId": file.Id,
+	}, nil, nil, account)
 	if err != nil {
 		return nil, err
 	}
-	if e.ErrorCode != "" {
-		if e.ErrorCode == "InvalidSessionKey" {
-			err = driver.Login(account)
-			if err != nil {
-				return nil, err
-			}
-			return driver.Link(args, account)
-		}
+	log.Debugln(string(body))
+	err = utils.Json.Unmarshal(body, &resp)
+	if err != nil {
+		return nil, err
 	}
 	if resp.ResCode != 0 {
 		return nil, fmt.Errorf(resp.ResMessage)
 	}
-	res, err := base.NoRedirectClient.R().Get(resp.FileDownloadUrl)
+	client, err := driver.getClient(account)
 	if err != nil {
 		return nil, err
 	}
-	link := base.Link{}
+	client = resty.NewWithClient(client.GetClient()).SetRedirectPolicy(
+		resty.RedirectPolicyFunc(func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		}))
+	res, err := client.R().SetHeader("User-Agent", base.UserAgent).Get("https:" + resp.FileDownloadUrl)
+	if err != nil {
+		return nil, err
+	}
+	log.Debugln(res.Status())
+	log.Debugln(res.String())
+	link := base.Link{
+		Headers: []base.Header{
+			{Name: "User-Agent", Value: base.UserAgent},
+			//{Name: "Authorization", Value: ""},
+		},
+	}
+	log.Debugln("first url:", resp.FileDownloadUrl)
 	if res.StatusCode() == 302 {
 		link.Url = res.Header().Get("location")
+		log.Debugln("second url:", link.Url)
+		_, _ = client.R().Get(link.Url)
+		if res.StatusCode() == 302 {
+			link.Url = res.Header().Get("location")
+		}
+		log.Debugln("third url:", link.Url)
 	} else {
 		link.Url = resp.FileDownloadUrl
 	}
+	link.Url = strings.Replace(link.Url, "http://", "https://", 1)
 	return &link, nil
 }
 
@@ -201,9 +225,9 @@ func (driver Cloud189) Path(path string, account *model.Account) (*model.File, [
 	return nil, files, nil
 }
 
-func (driver Cloud189) Proxy(ctx *gin.Context, account *model.Account) {
-	ctx.Request.Header.Del("Origin")
-}
+//func (driver Cloud189) Proxy(r *http.Request, account *model.Account) {
+//	r.Header.Del("Origin")
+//}
 
 func (driver Cloud189) Preview(path string, account *model.Account) (interface{}, error) {
 	return nil, base.ErrNotSupport
@@ -222,7 +246,7 @@ func (driver Cloud189) MakeDir(path string, account *model.Account) error {
 		"parentFolderId": parent.Id,
 		"folderName":     name,
 	}
-	_, err = driver.Request("https://cloud.189.cn/api/open/file/createFolder.action", "POST", form, nil, account)
+	_, err = driver.Request("https://cloud.189.cn/api/open/file/createFolder.action", base.Post, nil, form, nil, account)
 	return err
 }
 
@@ -256,7 +280,7 @@ func (driver Cloud189) Move(src string, dst string, account *model.Account) erro
 		"targetFolderId": dstDirFile.Id,
 		"taskInfos":      string(taskInfosBytes),
 	}
-	_, err = driver.Request("https://cloud.189.cn/api/open/batch/createBatchTask.action", "POST", form, nil, account)
+	_, err = driver.Request("https://cloud.189.cn/api/open/batch/createBatchTask.action", base.Post, nil, form, nil, account)
 	return err
 }
 
@@ -278,7 +302,7 @@ func (driver Cloud189) Rename(src string, dst string, account *model.Account) er
 		idKey:   srcFile.Id,
 		nameKey: dstName,
 	}
-	_, err = driver.Request(url, "POST", form, nil, account)
+	_, err = driver.Request(url, base.Post, nil, form, nil, account)
 	return err
 }
 
@@ -312,7 +336,7 @@ func (driver Cloud189) Copy(src string, dst string, account *model.Account) erro
 		"targetFolderId": dstDirFile.Id,
 		"taskInfos":      string(taskInfosBytes),
 	}
-	_, err = driver.Request("https://cloud.189.cn/api/open/batch/createBatchTask.action", "POST", form, nil, account)
+	_, err = driver.Request("https://cloud.189.cn/api/open/batch/createBatchTask.action", base.Post, nil, form, nil, account)
 	return err
 }
 
@@ -342,87 +366,17 @@ func (driver Cloud189) Delete(path string, account *model.Account) error {
 		"targetFolderId": "",
 		"taskInfos":      string(taskInfosBytes),
 	}
-	_, err = driver.Request("https://cloud.189.cn/api/open/batch/createBatchTask.action", "POST", form, nil, account)
+	_, err = driver.Request("https://cloud.189.cn/api/open/batch/createBatchTask.action", base.Post, nil, form, nil, account)
 	return err
 }
 
-// Upload Error: decrypt encryptionText failed
 func (driver Cloud189) Upload(file *model.FileStream, account *model.Account) error {
-	return base.ErrNotImplement
-	const DEFAULT uint64 = 10485760
-	var count = int64(math.Ceil(float64(file.GetSize()) / float64(DEFAULT)))
-	var finish uint64 = 0
-	parentFile, err := driver.File(file.ParentPath, account)
-	if err != nil {
-		return err
+	//return base.ErrNotImplement
+	if file == nil {
+		return base.ErrEmptyFile
 	}
-	if !parentFile.IsDir() {
-		return base.ErrNotFolder
-	}
-	res, err := driver.UploadRequest("/person/initMultiUpload", map[string]string{
-		"parentFolderId": parentFile.Id,
-		"fileName":       file.Name,
-		"fileSize":       strconv.FormatInt(int64(file.Size), 10),
-		"sliceSize":      strconv.FormatInt(int64(DEFAULT), 10),
-		"lazyCheck":      "1",
-	}, account)
-	if err != nil {
-		return err
-	}
-	uploadFileId := jsoniter.Get(res, "data.uploadFileId").ToString()
-	var i int64
-	var byteSize uint64
-	md5s := make([]string, 0)
-	md5Sum := md5.New()
-	for i = 1; i <= count; i++ {
-		byteSize = file.GetSize() - finish
-		if DEFAULT < byteSize {
-			byteSize = DEFAULT
-		}
-		log.Debugf("%d,%d", byteSize, finish)
-		byteData := make([]byte, byteSize)
-		n, err := io.ReadFull(file, byteData)
-		log.Debug(err, n)
-		if err != nil {
-			return err
-		}
-		finish += uint64(n)
-		md5Bytes := getMd5(byteData)
-		md5Str := hex.EncodeToString(md5Bytes)
-		md5Base64 := base64.StdEncoding.EncodeToString(md5Bytes)
-		md5s = append(md5s, md5Str)
-		md5Sum.Write(byteData)
-		res, err = driver.UploadRequest("/person/getMultiUploadUrls", map[string]string{
-			"partInfo":     fmt.Sprintf("%s-%s", strconv.FormatInt(i, 10), md5Base64),
-			"uploadFileId": uploadFileId,
-		}, account)
-		if err != nil {
-			return err
-		}
-		uploadData := jsoniter.Get(res, "uploadUrls.partNumber_"+strconv.FormatInt(i, 10))
-		headers := strings.Split(uploadData.Get("requestHeader").ToString(), "&")
-		req, err := http.NewRequest("PUT", uploadData.Get("requestURL").ToString(), bytes.NewBuffer(byteData))
-		if err != nil {
-			return err
-		}
-		for _, header := range headers {
-			kv := strings.Split(header, "=")
-			req.Header.Set(kv[0], strings.Join(kv[1:], "="))
-		}
-		res, err := base.HttpClient.Do(req)
-		if err != nil {
-			return err
-		}
-		log.Debugf("%+v", res)
-	}
-	id := md5Sum.Sum(nil)
-	res, err = driver.UploadRequest("/person/commitMultiUploadFile", map[string]string{
-		"uploadFileId": uploadFileId,
-		"fileMd5":      hex.EncodeToString(id),
-		"sliceMd5":     utils.GetMD5Encode(strings.Join(md5s, "\n")),
-		"lazyCheck":    "1",
-	}, account)
-	return err
+	return driver.NewUpload(file, account)
+	//return driver.OldUpload(file, account)
 }
 
 var _ base.Driver = (*Cloud189)(nil)

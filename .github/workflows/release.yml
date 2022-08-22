@@ -6,11 +6,23 @@ on:
       - '*'
 
 jobs:
+  changelog:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - run: npx changelogithub # or changelogithub@0.12 if ensure the stable result
+        env:
+          GITHUB_TOKEN: ${{secrets.MY_TOKEN}}
   release:
+    needs: changelog
     strategy:
       matrix:
         platform: [ubuntu-latest]
-        go-version: [1.17]
+        go-version: [1.18]
     name: Release
     runs-on: ${{ matrix.platform }}
     steps:
@@ -18,14 +30,6 @@ jobs:
         uses: actions/setup-go@v2
         with:
           go-version: ${{ matrix.go-version }}
-
-#      - name: Setup docker
-#        uses: docker-practice/actions-setup-docker@master
-
-      - name: Setup Node
-        uses: actions/setup-node@v2
-        with:
-          node-version: '16'
 
       - name: Checkout
         uses: actions/checkout@v2
@@ -35,16 +39,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      - name: Checkout web repo
-        uses: actions/checkout@v2
-        with:
-          repository: Xhofe/alist-web
-          ref: v2
-          path: alist-web
-          persist-credentials: false
-          fetch-depth: 0
-
-      - name: Set up xgo
+      - name: Install upx
         run: |
           docker pull techknowlogick/xgo:latest
           go install src.techknowlogick.com/xgo@latest
@@ -53,15 +48,9 @@ jobs:
       - name: Build
         run: |
           mv alist/build.sh .
+          bash build.sh cdn
+          mv dist/* alist/public
           bash build.sh release
-
-      - name: Upload asserts files
-        uses: ad-m/github-push-action@master
-        with:
-          github_token: ${{ secrets.MY_TOKEN }}
-          branch: cdn
-          directory: alist-web
-          repository: Xhofe/alist-web
 
       - name: Release
         uses: softprops/action-gh-release@v1

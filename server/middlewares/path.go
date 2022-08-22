@@ -1,7 +1,6 @@
 package middlewares
 
 import (
-	"fmt"
 	"github.com/Xhofe/alist/conf"
 	"github.com/Xhofe/alist/model"
 	"github.com/Xhofe/alist/server/common"
@@ -19,19 +18,20 @@ func PathCheck(c *gin.Context) {
 	c.Set("req", req)
 	token := c.GetHeader("Authorization")
 	if token == conf.Token {
+		c.Set("admin", true)
 		c.Next()
 		return
 	}
 	meta, err := model.GetMetaByPath(req.Path)
 	if err == nil {
 		if meta.Password != "" && meta.Password != req.Password {
-			common.ErrorResp(c, fmt.Errorf("wrong password"), 401)
+			common.ErrorStrResp(c, "Wrong password", 401)
 			c.Abort()
 			return
 		}
 	} else if conf.GetBool("check parent folder") {
 		if !common.CheckParent(utils.Dir(req.Path), req.Password) {
-			common.ErrorResp(c, fmt.Errorf("wrong password"), 401)
+			common.ErrorStrResp(c, "Wrong password", 401)
 			c.Abort()
 			return
 		}

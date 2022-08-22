@@ -22,8 +22,9 @@ dist/
 # vendor/
 bin/*
 /alist
+/alist.exe
 *.json
-public/index.html
+public/*.html
 public/assets/
 public/public/
 data/
